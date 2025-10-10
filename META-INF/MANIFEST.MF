@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Main-Class: com.campusbus.booking_system.BookingSystemApplication
+Class-Path: .
+Created-By: 21.0.8 (Red Hat, Inc.)
+
