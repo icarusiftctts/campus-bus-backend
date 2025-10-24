@@ -5,12 +5,13 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.campusbus.entity.Booking;
 import com.campusbus.repository.BookingRepository;
 import com.campusbus.util.QRCodeGenerator;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
-
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.concurrent.TimeUnit;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * VALIDATE QR HANDLER
@@ -77,10 +78,14 @@ import java.util.Optional;
  * - QR code works offline (no internet needed for display)
  * - Color coding: Blue (not scanned) → Green (scanned) → Red (expired)
  */
+
+
 public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
     private static ConfigurableApplicationContext context;
     private static BookingRepository bookingRepository;
+    private static RedisTemplate<String, String> redisTemplate;
+
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private void initializeSpringContext() {
@@ -88,6 +93,7 @@ public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Ma
             System.setProperty("spring.main.web-application-type", "none");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             bookingRepository = context.getBean(BookingRepository.class);
+            redisTemplate = context.getBean(RedisTemplate.class);
         }
     }
 
@@ -99,9 +105,13 @@ public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Ma
             // Parse request body
             String requestBody = (String) event.get("body");
             Map<String, Object> body = objectMapper.readValue(requestBody, Map.class);
-            
+
             String qrToken = (String) body.get("qrToken");
             String tripId = (String) body.get("tripId");
+
+            if (qrToken == null || tripId == null) {
+                return createInvalidResponse("Missing qrToken or tripId");
+            }
 
             // Validate QR token
             Map<String, Object> tokenData = QRCodeGenerator.validateQRToken(qrToken);
@@ -112,49 +122,68 @@ public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Ma
             String bookingId = (String) tokenData.get("bookingId");
             String tokenTripId = (String) tokenData.get("tripId");
 
-            // Verify trip matches
+            // Verify trip matches (critical security check)
             if (!tripId.equals(tokenTripId)) {
                 return createInvalidResponse("QR code not valid for this trip");
             }
 
-            // Get booking details
-            Optional<Booking> bookingOpt = bookingRepository.findById(bookingId);
-            if (bookingOpt.isEmpty()) {
-                return createInvalidResponse("Booking not found");
+            // Acquire Redis lock to prevent concurrent scans of same booking
+            String lockKey = "scan:" + bookingId;
+            Boolean lockAcquired = redisTemplate.opsForValue().setIfAbsent(lockKey, "scanning", 30, TimeUnit.SECONDS);
+            if (!Boolean.TRUE.equals(lockAcquired)) {
+                return createInvalidResponse("QR scan in progress, try again");
             }
 
-            Booking booking = bookingOpt.get();
+            try {
+                // Validate booking exists and is valid for this trip
+                Booking booking = bookingRepository.findBookingForValidation(bookingId, tripId);
+                if (booking == null) {
+                    return createInvalidResponse("Booking not found for this trip");
+                }
 
-            // Check if already scanned
-            if ("SCANNED".equals(booking.getStatus())) {
-                Map<String, Object> responseData = Map.of(
-                    "valid", true,
-                    "status", "ALREADY_SCANNED",
-                    "message", "QR code already scanned"
-                );
-                return createSuccessResponse(200, responseData);
+                // Check if already scanned
+                if ("SCANNED".equals(booking.getStatus())) {
+                    Map<String, Object> responseData = Map.of(
+                            "valid", true,
+                            "status", "ALREADY_SCANNED",
+                            "message", "QR code already scanned"
+                    );
+                    return createSuccessResponse(200, responseData);
+                }
+
+                // Check if booking is confirmed
+                if (!"CONFIRMED".equals(booking.getStatus())) {
+                    return createInvalidResponse("Booking not confirmed");
+                }
+
+                // Mark as scanned (with transaction protection)
+                int updated = markBookingScanned(bookingId, tripId);
+                if (updated > 0) {
+                    Map<String, Object> responseData = Map.of(
+                            "valid", true,
+                            "status", "SCANNED",
+                            "bookingId", bookingId,
+                            "studentId", booking.getStudentId(),
+                            "message", "QR code validated successfully"
+                    );
+                    return createSuccessResponse(200, responseData);
+                } else {
+                    return createInvalidResponse("Failed to update booking status");
+                }
+
+            } finally {
+                // Always release the lock
+                redisTemplate.delete(lockKey);
             }
-
-            // Check if booking is confirmed
-            if (!"CONFIRMED".equals(booking.getStatus())) {
-                return createInvalidResponse("Booking not confirmed");
-            }
-
-            // Mark as scanned
-            bookingRepository.markAsScanned(bookingId);
-
-            Map<String, Object> responseData = Map.of(
-                "valid", true,
-                "status", "SCANNED",
-                "bookingId", bookingId,
-                "studentId", booking.getStudentId(),
-                "message", "QR code validated successfully"
-            );
-            return createSuccessResponse(200, responseData);
 
         } catch (Exception e) {
             return createErrorResponse(500, "Error: " + e.getMessage());
         }
+    }
+
+    @Transactional
+    public int markBookingScanned(String bookingId, String tripId) {
+        return bookingRepository.markBookingScanned(bookingId, tripId);
     }
 
     private Map<String, Object> createSuccessResponse(int statusCode, Map<String, Object> data) {
@@ -170,19 +199,7 @@ public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Ma
     }
 
     private Map<String, Object> createInvalidResponse(String message) {
-        Map<String, Object> responseData = Map.of(
-            "valid", false,
-            "message", message
-        );
-        try {
-            return Map.of(
-                "statusCode", 400,
-                "headers", Map.of("Content-Type", "application/json"),
-                "body", objectMapper.writeValueAsString(responseData)
-            );
-        } catch (Exception e) {
-            return createErrorResponse(500, "Error serializing response");
-        }
+        return createErrorResponse(400, message);
     }
 
     private Map<String, Object> createErrorResponse(int statusCode, String message) {

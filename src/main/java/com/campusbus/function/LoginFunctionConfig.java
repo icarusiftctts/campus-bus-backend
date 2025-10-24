@@ -1,6 +1,6 @@
 package com.campusbus.function;
 
-import com.campusbus.lambda.LoginHandler;
+import com.campusbus.lambda.LoginUserHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -13,7 +13,7 @@ public class LoginFunctionConfig {
     @Bean
     public Function<Map<String, Object>, Map<String, Object>> login() {
         return event -> {
-            LoginHandler handler = new LoginHandler();
+            LoginUserHandler handler = new LoginUserHandler();
             return handler.handleRequest(event, null);
         };
     }

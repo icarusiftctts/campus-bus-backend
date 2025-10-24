@@ -16,64 +16,10 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.redis.core.RedisTemplate;
 
 import java.time.Duration;
-
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * BOOK TRIP HANDLER
- * 
- * Purpose: Book bus seats or join waitlist with automatic QR code generation
- * 
- * API Gateway Integration:
- * - Method: POST
- * - Path: /api/bookings
- * - Authorization: Required (JWT token)
- * 
- * Frontend Integration (Flutter):
- * 1. Make HTTP POST request to: https://your-api-gateway-url/api/bookings
- * 2. Headers: {
- *      "Content-Type": "application/json",
- *      "Authorization": "Bearer <authToken>"
- *    }
- * 3. Body: {
- *      "tripId": "T12AB34CD"
- *    }
- * 4. Success Response - Confirmed (201): {
- *      "bookingId": "B56EF78GH",
- *      "status": "CONFIRMED",
- *      "qrToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
- *      "message": "Seat confirmed"
- *    }
- * 5. Success Response - Waitlisted (201): {
- *      "bookingId": "B56EF78GH", 
- *      "status": "WAITLIST",
- *      "position": 3,
- *      "message": "Added to waitlist"
- *    }
- * 6. Error Response (400): {"message": "Already booked for this trip"}
- * 
- * Usage Flow:
- * - Student selects a trip from available trips list
- * - Taps "Book Now" or "Join Waitlist" button
- * - Flutter sends POST request with tripId
- * - On CONFIRMED: Show QR code, store qrToken, navigate to "My Bookings"
- * - On WAITLIST: Show waitlist position, set up notifications for promotion
- * - On error: Show error message
- * 
- * QR Code Usage:
- * - If status = "CONFIRMED", display QR code generated from qrToken
- * - QR code is used by bus operators for boarding validation
- * - Store qrToken securely for offline QR display
- * - QR code expires 24 hours after trip completion
- * 
- * Waitlist Management:
- * - If waitlisted, show position number to student
- * - Set up push notifications for waitlist promotion
- * - When promoted, student gets new booking with QR code
- * - Auto-refresh booking status every few minutes
- */
 public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
     private static ConfigurableApplicationContext context;
@@ -92,7 +38,6 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
             studentRepository = context.getBean(StudentRepository.class);
             redisTemplate = context.getBean(RedisTemplate.class);
         }
-
     }
 
     @Override
@@ -186,17 +131,18 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
                     );
                     return createSuccessResponse(201, responseData);
                 } else {
-                    // Waitlist booking - no QR token yet
-                    int waitlistCount = bookingRepository.countByTripIdAndStatus(tripId, "WAITLIST");
+                    // Waitlist booking - use atomic position assignment
                     booking.setStatus("WAITLIST");
-                    booking.setWaitlistPosition(waitlistCount + 1);
-                    bookingRepository.save(booking);
-                    
+                    bookingRepository.save(booking); // Save first to get DB row
+
+                    // Atomically assign position using database-level operation
+                    int position = bookingRepository.assignAtomicWaitlistPosition(tripId, bookingId);
+
                     Map<String, Object> responseData = Map.of(
-                        "bookingId", bookingId,
-                        "status", "WAITLIST",
-                        "position", waitlistCount + 1,
-                        "message", "Added to waitlist"
+                            "bookingId", bookingId,
+                            "status", "WAITLIST",
+                            "position", position,
+                            "message", "Added to waitlist"
                     );
                     return createSuccessResponse(201, responseData);
                 }

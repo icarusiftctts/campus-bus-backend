@@ -2,17 +2,15 @@ package com.campusbus.lambda;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.campusbus.entity.Trip;
 import com.campusbus.repository.TripRepository;
-import com.campusbus.util.AuthTokenUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
-
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
+
 
 /**
  * GET AVAILABLE TRIPS HANDLER
@@ -61,10 +59,12 @@ import java.util.Map;
  * - Red: availableSeats = 0 (Full - show waitlist option)
  * - Show waitlist position if student is waitlisted
  */
+
 public class GetAvailableTripsHandler implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
     private static ConfigurableApplicationContext context;
     private static TripRepository tripRepository;
+
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private void initializeSpringContext() {
@@ -80,75 +80,50 @@ public class GetAvailableTripsHandler implements RequestHandler<Map<String, Obje
         try {
             initializeSpringContext();
 
-            // Validate JWT token
-            Map<String, Object> headers = (Map<String, Object>) event.get("headers");
-            String authHeader = (String) headers.get("Authorization");
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                return createErrorResponse(401, "Missing or invalid Authorization header");
+            // Extract query parameters from API Gateway event
+            Map<String, String> queryStringParams = (Map<String, String>) event.get("queryStringParameters");
+            if (queryStringParams == null) {
+                return createErrorResponse(400, "Missing query parameters");
             }
 
-            String token = authHeader.substring(7);
-            Map<String, Object> tokenData = AuthTokenUtil.validateAuthToken(token);
-            if (!(Boolean) tokenData.get("valid")) {
-                return createErrorResponse(401, "Invalid or expired token");
-            }
+            String route = queryStringParams.get("route");
+            String dateStr = queryStringParams.get("date");
 
-            // Parse query parameters
-            Map<String, Object> queryParams = (Map<String, Object>) event.get("queryStringParameters");
-            if (queryParams == null) {
-                return createErrorResponse(400, "Missing query parameters: route and tripDate");
-            }
-
-            String route = (String) queryParams.get("route");
-            String dateStr = (String) queryParams.get("tripDate");
-            
             if (route == null || dateStr == null) {
-                return createErrorResponse(400, "Missing required parameters: route and tripDate");
+                return createErrorResponse(400, "Missing 'route' or 'date' parameter");
             }
 
             LocalDate tripDate = LocalDate.parse(dateStr);
-            List<Trip> trips = tripRepository.findByRouteAndDate(route, tripDate);
-            List<Map<String, Object>> result = new ArrayList<>();
 
-            for (Trip trip : trips) {
-                int confirmed = tripRepository.countConfirmedBookings(trip.getTripId());
-                int waitlist = tripRepository.countWaitlistBookings(trip.getTripId());
-                int available = trip.getCapacity() - trip.getFacultyReserved() - confirmed;
+            // Execute complex JOIN query (per Week 1 Checklist)
+            List<Map<String, Object>> trips = tripRepository.findTripAvailabilityWithCounts(tripDate, route);
 
-                result.add(Map.of(
-                    "tripId", trip.getTripId(),
-                    "departureTime", trip.getDepartureTime().toString(),
-                    "capacity", trip.getCapacity(),
-                    "confirmedBookings", confirmed,
-                    "waitlistCount", waitlist,
-                    "availableSeats", Math.max(0, available)
-                ));
-            }
-
-            return createSuccessResponse(200, result);
+            return createSuccessResponse(200, trips);
 
         } catch (Exception e) {
             return createErrorResponse(500, "Error: " + e.getMessage());
         }
     }
 
-    private Map<String, Object> createSuccessResponse(int statusCode, Object data) {
+    private Map<String, Object> createSuccessResponse(int statusCode, Object body) {
         try {
             return Map.of(
-                "statusCode", statusCode,
-                "headers", Map.of("Content-Type", "application/json"),
-                "body", objectMapper.writeValueAsString(data)
+                    "statusCode", statusCode,
+                    "headers", Map.of("Content-Type", "application/json"),
+                    "body", objectMapper.writeValueAsString(body)
             );
-        } catch (Exception e) {
-            return createErrorResponse(500, "Error serializing response");
+        } catch (java.lang.Exception e) {
+            return createErrorResponse(500, "Error serializing response body: " + e.getMessage());
         }
     }
 
     private Map<String, Object> createErrorResponse(int statusCode, String message) {
         return Map.of(
-            "statusCode", statusCode,
-            "headers", Map.of("Content-Type", "application/json"),
-            "body", "{\"message\":\"" + message + "\"}"
+                "statusCode", statusCode,
+                "headers", Map.of("Content-Type", "application/json"),
+                "body", "{\"error\":\"" + message + "\"}"
         );
     }
+
+
 }

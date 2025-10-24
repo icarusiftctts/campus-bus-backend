@@ -15,8 +15,7 @@ public class Student {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false)
-    private String password;
+    // Password handled by AWS Cognito - not stored in database
 
     private String room;
     private String phone;
@@ -26,11 +25,10 @@ public class Student {
 
     // Constructors
     public Student() {}
-    public Student(String studentId, String email, String name, String password, String room, String phone) {
+    public Student(String studentId, String email, String name, String room, String phone) {
         this.studentId = studentId;
         this.email = email;
         this.name = name;
-        this.password = password;
         this.room = room;
         this.phone = phone;
     }
@@ -42,8 +40,7 @@ public class Student {
     public void setEmail(String email) { this.email = email; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
-    public String getPassword() { return password; }
-    public void setPassword(String password) { this.password = password; }
+    // Password methods removed - handled by AWS Cognito
     public String getRoom() { return room; }
     public void setRoom(String room) { this.room = room; }
     public String getPhone() { return phone; }

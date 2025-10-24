@@ -1,72 +1,28 @@
 package com.campusbus.lambda;
 
-import com.amazonaws.services.lambda.runtime.Context;
-import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.campusbus.entity.Booking;
 import com.campusbus.repository.BookingRepository;
-import com.campusbus.util.AuthTokenUtil;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.campusbus.repository.StudentRepository;
+import com.campusbus.repository.TripRepository;
+import com.amazonaws.services.lambda.runtime.Context;
+import com.amazonaws.services.lambda.runtime.RequestHandler;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
-
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import com.campusbus.util.AuthTokenUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
-import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
-/**
- * CANCEL BOOKING HANDLER
- * 
- * Purpose: Cancel bookings and automatically promote waitlisted students
- * 
- * API Gateway Integration:
- * - Method: DELETE
- * - Path: /api/bookings/{bookingId}
- * - Authorization: Required (JWT token)
- * 
- * Frontend Integration (Flutter):
- * 1. Make HTTP DELETE request to: https://your-api-gateway-url/api/bookings/B56EF78GH
- * 2. Headers: {
- *      "Content-Type": "application/json",
- *      "Authorization": "Bearer <authToken>"
- *    }
- * 3. No request body needed (bookingId in URL path)
- * 4. Success Response (200): {
- *      "message": "Booking cancelled and next waitlisted user promoted"
- *    }
- * 5. Error Response (403): {"message": "Not authorized to cancel this booking"}
- * 6. Error Response (400): {"message": "Booking already cancelled"}
- * 
- * Usage Flow:
- * - Student opens "My Bookings" screen in Flutter app
- * - Views list of active bookings with trip details
- * - Taps "Cancel" button on a booking
- * - Show confirmation dialog: "Are you sure you want to cancel?"
- * - If confirmed, Flutter sends DELETE request with bookingId
- * - On success: Remove booking from UI, show success message
- * - On error: Show error message
- * 
- * Cancellation Rules:
- * - Students can cancel their own bookings only
- * - Cannot cancel already cancelled bookings
- * - Cannot cancel bookings that are already scanned (boarded)
- * - Cancelling confirmed booking promotes next waitlisted student
- * - Cancelling waitlist booking just removes from waitlist
- * 
- * Waitlist Promotion:
- * - When confirmed booking is cancelled, next waitlisted student is promoted
- * - Promoted student gets QR code and push notification
- * - Waitlist positions are automatically updated for remaining students
- * - Real-time updates sent to all affected students
- * 
- * UI Considerations:
- * - Show cancellation deadline (e.g., "Cancel by 1 hour before departure")
- * - Disable cancel button after deadline or if already boarded
- * - Show penalty warning if applicable (future feature)
- * - Refresh booking list after successful cancellation
- */
 public class CancelBookingHandler implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
     private static ConfigurableApplicationContext context;
     private static BookingRepository bookingRepository;
+    private static TripRepository tripRepository;
+    private static StudentRepository studentRepository;
+    private static RedisTemplate<String, String> redisTemplate;
+
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private void initializeSpringContext() {
@@ -74,6 +30,9 @@ public class CancelBookingHandler implements RequestHandler<Map<String, Object>,
             System.setProperty("spring.main.web-application-type", "none");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             bookingRepository = context.getBean(BookingRepository.class);
+            tripRepository = context.getBean(TripRepository.class);
+            studentRepository = context.getBean(StudentRepository.class);
+            redisTemplate = context.getBean(RedisTemplate.class);
         }
     }
 
@@ -81,6 +40,13 @@ public class CancelBookingHandler implements RequestHandler<Map<String, Object>,
     public Map<String, Object> handleRequest(Map<String, Object> event, Context context) {
         try {
             initializeSpringContext();
+
+            // Extract bookingId from path parameters
+            Map<String, Object> pathParams = (Map<String, Object>) event.get("pathParameters");
+            if (pathParams == null) {
+                return createErrorResponse(400, "Missing bookingId in path");
+            }
+            String bookingId = (String) pathParams.get("bookingId");
 
             // Validate JWT token and extract student ID
             Map<String, Object> headers = (Map<String, Object>) event.get("headers");
@@ -97,55 +63,55 @@ public class CancelBookingHandler implements RequestHandler<Map<String, Object>,
 
             String studentId = (String) tokenData.get("studentId");
 
-            // Extract bookingId from path parameters
-            Map<String, Object> pathParams = (Map<String, Object>) event.get("pathParameters");
-            if (pathParams == null) {
-                return createErrorResponse(400, "Missing bookingId in path");
+            boolean result = cancelBooking(bookingId, studentId);
+            if (result) {
+                return createSuccessResponse(200, "Booking cancelled and waitlist promoted");
+            } else {
+                return createErrorResponse(400, "Cancellation failed - booking not found or unauthorized");
             }
-            String bookingId = (String) pathParams.get("bookingId");
-
-            Optional<Booking> bookingOpt = bookingRepository.findById(bookingId);
-            if (bookingOpt.isEmpty()) {
-                return createErrorResponse(404, "Booking not found");
-            }
-
-            Booking booking = bookingOpt.get();
-            
-            // Verify ownership
-            if (!booking.getStudentId().equals(studentId)) {
-                return createErrorResponse(403, "Not authorized to cancel this booking");
-            }
-
-            // Check if already cancelled
-            if ("CANCELLED".equals(booking.getStatus())) {
-                return createErrorResponse(400, "Booking already cancelled");
-            }
-
-            // Check if already scanned (boarded)
-            if ("SCANNED".equals(booking.getStatus())) {
-                return createErrorResponse(400, "Cannot cancel booking after boarding");
-            }
-
-            String originalStatus = booking.getStatus();
-            String tripId = booking.getTripId();
-
-            // Cancel the booking
-            booking.setStatus("CANCELLED");
-            bookingRepository.save(booking);
-
-            // If it was a confirmed booking, promote next waitlisted user
-            if ("CONFIRMED".equals(originalStatus)) {
-                Optional<Booking> nextWaitlisted = bookingRepository.findFirstWaitlistedBooking(tripId);
-                if (nextWaitlisted.isPresent()) {
-                    bookingRepository.promoteFromWaitlist(nextWaitlisted.get().getBookingId());
-                    return createSuccessResponse(200, "Booking cancelled and next waitlisted user promoted");
-                }
-            }
-
-            return createSuccessResponse(200, "Booking cancelled successfully");
 
         } catch (Exception e) {
             return createErrorResponse(500, "Error: " + e.getMessage());
+        }
+    }
+
+    @Transactional
+    public boolean cancelBooking(String bookingId, String studentId) {
+        // 1. Acquire Redis lock to prevent concurrent cancellations on same trip
+        Booking currentBooking = bookingRepository.findById(bookingId).orElse(null);
+        if (currentBooking == null || !currentBooking.getStudentId().equals(studentId)) {
+            return false; // Not authorized or not found
+        }
+
+        String tripId = currentBooking.getTripId();
+        String lockKey = "cancel:" + tripId;
+        Boolean lockAcquired = redisTemplate.opsForValue().setIfAbsent(lockKey, "cancel", 30, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(lockAcquired)) {
+            return false; // Another cancellation in progress
+        }
+
+        try {
+            // 2. Verify booking status (cannot cancel if scanned/already cancelled)
+            if ("SCANNED".equals(currentBooking.getStatus()) ||
+                    "CANCELLED".equals(currentBooking.getStatus())) {
+                return false;
+            }
+
+            // 3. Mark current booking as cancelled
+            currentBooking.setStatus("CANCELLED");
+            bookingRepository.save(currentBooking);
+
+            // 4. Promote next waitlisted user (if any)
+            bookingRepository.promoteNextWaitlist(tripId);
+
+            // 5. Update remaining waitlist positions
+            bookingRepository.updateWaitlistPositions(tripId);
+
+            return true;
+
+        } finally {
+            // 6. Always release the lock
+            redisTemplate.delete(lockKey);
         }
     }
 

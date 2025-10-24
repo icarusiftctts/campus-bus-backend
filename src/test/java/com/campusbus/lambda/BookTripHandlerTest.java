@@ -51,7 +51,7 @@ class BookTripHandlerTest {
     void bookTrip_StudentBlocked_ReturnsError() {
         // Arrange
         Map<String, Object> event = createValidEvent();
-        Student blockedStudent = new Student("S12345678", "test@college.edu", "Test Student", "password", "A101", "9876543210");
+        Student blockedStudent = new Student("S12345678", "test@college.edu", "Test Student", "A101", "9876543210");
         blockedStudent.setPenaltyCount(3);
         blockedStudent.setBlockedUntil(LocalDateTime.now().plusDays(1));
 
@@ -207,7 +207,7 @@ class BookTripHandlerTest {
     }
 
     private Student createValidStudent() {
-        return new Student("S12345678", "test@college.edu", "Test Student", "password", "A101", "9876543210");
+        return new Student("S12345678", "test@college.edu", "Test Student", "A101", "9876543210");
     }
 
     private Trip createValidTrip() {
