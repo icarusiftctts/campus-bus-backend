@@ -16,33 +16,27 @@ import javax.sql.DataSource;
 public class DatabaseConfig {
 
     @Bean
-    // amazonq-ignore-next-line
     public DataSource dataSource() {
         HikariConfig config = new HikariConfig();
 
-        // Use RDS Proxy endpoint
         String proxyEndpoint = System.getenv("RDS_PROXY_ENDPOINT");
         if (proxyEndpoint == null) {
             throw new RuntimeException("RDS_PROXY_ENDPOINT environment variable not set");
         }
-        String dbUrl = "jdbc:mysql://" + proxyEndpoint + ":3306/campusbus?useSSL=true&requireSSL=true&serverTimezone=UTC";
-
-        config.setJdbcUrl(dbUrl);
+        
+        config.setJdbcUrl("jdbc:mysql://" + proxyEndpoint + ":3306/campusbus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&cachePrepStmts=true&useServerPrepStmts=true&rewriteBatchedStatements=true");
         config.setUsername(System.getenv("DB_USERNAME"));
-        if (System.getenv("DB_USERNAME") == null) {
-            throw new RuntimeException("Database Username environment variable not set");
-        }
-
         config.setPassword(System.getenv("DB_PASSWORD"));
-        if (System.getenv("DB_PASSWORD") == null) {
-            throw new RuntimeException("Database Password environment variable not set");
-        }
-
-        config.setMaximumPoolSize(1);                      // Critical for Lambda
-        config.setConnectionTimeout(30000);
-        config.setIdleTimeout(60000);
-        config.setLeakDetectionThreshold(60000);
-
+        
+        config.setMaximumPoolSize(1);
+        config.setMinimumIdle(1);
+        config.setConnectionTimeout(10000);
+        config.setValidationTimeout(5000);
+        config.setIdleTimeout(30000);
+        config.setMaxLifetime(60000);
+        config.setAutoCommit(true);
+        config.setConnectionTestQuery("SELECT 1");
+        
         return new HikariDataSource(config);
     }
 

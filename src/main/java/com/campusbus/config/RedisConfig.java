@@ -13,6 +13,9 @@ public class RedisConfig {
     @Bean
     public LettuceConnectionFactory redisConnectionFactory() {
         String redisEndpoint = System.getenv("REDIS_ENDPOINT");
+        if (redisEndpoint == null || redisEndpoint.isEmpty()) {
+            return null;
+        }
         RedisStandaloneConfiguration config = new RedisStandaloneConfiguration();
         config.setHostName(redisEndpoint);
         config.setPort(6379);
@@ -20,9 +23,13 @@ public class RedisConfig {
     }
 
     @Bean
-    public RedisTemplate<String, String> redisTemplate() {
-        RedisTemplate<String, String> template = new RedisTemplate<>();
-        template.setConnectionFactory(redisConnectionFactory());
+    public RedisTemplate<String, Object> redisTemplate() {
+        LettuceConnectionFactory factory = redisConnectionFactory();
+        if (factory == null) {
+            return null;
+        }
+        RedisTemplate<String, Object> template = new RedisTemplate<>();
+        template.setConnectionFactory(factory);
         template.setKeySerializer(new StringRedisSerializer());
         template.setValueSerializer(new StringRedisSerializer());
         return template;

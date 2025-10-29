@@ -28,11 +28,16 @@ public class CancelBookingHandler implements RequestHandler<Map<String, Object>,
     private void initializeSpringContext() {
         if (context == null) {
             System.setProperty("spring.main.web-application-type", "none");
+            System.setProperty("spring.main.lazy-initialization", "true");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             bookingRepository = context.getBean(BookingRepository.class);
             tripRepository = context.getBean(TripRepository.class);
             studentRepository = context.getBean(StudentRepository.class);
-            redisTemplate = context.getBean(RedisTemplate.class);
+            try {
+                redisTemplate = context.getBean(RedisTemplate.class);
+            } catch (Exception e) {
+                redisTemplate = null;
+            }
         }
     }
 

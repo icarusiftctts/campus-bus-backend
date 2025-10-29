@@ -65,6 +65,7 @@ public class RegisterUserHandler implements RequestHandler<Map<String, Object>, 
     private void initializeSpringContext() {
         if (context == null) {
             System.setProperty("spring.main.web-application-type", "none");
+            System.setProperty("spring.main.lazy-initialization", "true");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             studentRepository = context.getBean(StudentRepository.class);
         }
@@ -80,6 +81,12 @@ public class RegisterUserHandler implements RequestHandler<Map<String, Object>, 
             Map<String, Object> body = objectMapper.readValue(requestBody, Map.class);
 
             String email = (String) body.get("email");
+
+            if (!isValidCollegeEmail(email)) {
+                return createErrorResponse(403,
+                        "Access denied. Only @lnmiit.ac.in email addresses are allowed.");
+            }
+
             String name = (String) body.get("name");
             String room = (String) body.get("room");
             String phone = (String) body.get("phone");
@@ -120,6 +127,14 @@ public class RegisterUserHandler implements RequestHandler<Map<String, Object>, 
         } catch (Exception e) {
             return createErrorResponse(500, "Error: " + e.getMessage());
         }
+    }
+
+    // ✅ ADD THIS METHOD
+    private boolean isValidCollegeEmail(String email) {
+        if (email == null || email.trim().isEmpty()) {
+            return false;
+        }
+        return email.toLowerCase().endsWith("@lnmiit.ac.in");
     }
 
     private Map<String, Object> createSuccessResponse(int statusCode, Map<String, Object> data) {

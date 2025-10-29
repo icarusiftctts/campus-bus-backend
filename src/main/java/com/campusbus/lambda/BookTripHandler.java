@@ -32,11 +32,16 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
     private void initializeSpringContext() {
         if (context == null) {
             System.setProperty("spring.main.web-application-type", "none");
+            System.setProperty("spring.main.lazy-initialization", "true");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             bookingRepository = context.getBean(BookingRepository.class);
             tripRepository = context.getBean(TripRepository.class);
             studentRepository = context.getBean(StudentRepository.class);
-            redisTemplate = context.getBean(RedisTemplate.class);
+            try {
+                redisTemplate = context.getBean(RedisTemplate.class);
+            } catch (Exception e) {
+                redisTemplate = null;
+            }
         }
     }
 
@@ -45,7 +50,6 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
         try {
             initializeSpringContext();
 
-            // Validate JWT token and extract student ID
             Map<String, Object> headers = (Map<String, Object>) event.get("headers");
             String authHeader = (String) headers.get("Authorization");
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -60,7 +64,6 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
 
             String studentId = (String) tokenData.get("studentId");
 
-            // Check student penalty status
             Optional<Student> studentOpt = studentRepository.findById(studentId);
             if (studentOpt.isEmpty()) {
                 return createErrorResponse(404, "Student not found");
@@ -71,7 +74,6 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
                 return createErrorResponse(403, "Account blocked due to penalties");
             }
 
-            // Parse and validate request body
             String requestBody = (String) event.get("body");
             if (requestBody == null || requestBody.trim().isEmpty()) {
                 return createErrorResponse(400, "Missing request body");
@@ -83,60 +85,77 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
                 return createErrorResponse(400, "Missing tripId parameter");
             }
 
-            // Validate trip exists before acquiring expensive Redis lock
             Optional<Trip> tripOpt = tripRepository.findById(tripId);
             if (tripOpt.isEmpty()) {
                 return createErrorResponse(404, "Trip not found");
             }
 
-            // Check if student already has booking for this trip
+            Trip trip = tripOpt.get();
+            
+            if (trip.getTripDate().isBefore(java.time.LocalDate.now()) || 
+                (trip.getTripDate().isEqual(java.time.LocalDate.now()) && 
+                 trip.getDepartureTime().isBefore(java.time.LocalTime.now()))) {
+                return createErrorResponse(400, "Cannot book past trips");
+            }
+
             Optional<Booking> existingBooking = bookingRepository.findByStudentIdAndTripId(studentId, tripId);
             if (existingBooking.isPresent()) {
                 return createErrorResponse(400, "Already booked for this trip");
             }
 
-            // NOW acquire Redis lock after all validations pass
+            Optional<Booking> activeRouteBooking = bookingRepository.findActiveBookingByStudentIdAndRoute(studentId, trip.getRoute());
+            if (activeRouteBooking.isPresent()) {
+                String direction = trip.getRoute().equals("CAMPUS_TO_CITY") ? "Campus to City" : "City to Campus";
+                return createErrorResponse(400, "You already have an active " + direction + " booking. Cancel it before booking another.");
+            }
+
             String lockKey = "booking:" + tripId;
-            Boolean lockAcquired = redisTemplate.opsForValue().setIfAbsent(lockKey, studentId, Duration.ofSeconds(30));
-            if (!lockAcquired) {
-                return createErrorResponse(409, "Booking in progress, please try again");
+            Boolean lockAcquired = true;
+            if (redisTemplate != null) {
+                lockAcquired = redisTemplate.opsForValue().setIfAbsent(lockKey, studentId, Duration.ofSeconds(30));
+                if (Boolean.FALSE.equals(lockAcquired)) {
+                    return createErrorResponse(409, "Booking in progress, please try again");
+                }
             }
 
             try {
-                Trip trip = tripOpt.get();
-                
-                // Re-check booking count inside lock to ensure accuracy
                 Optional<Booking> reCheckBooking = bookingRepository.findByStudentIdAndTripId(studentId, tripId);
                 if (reCheckBooking.isPresent()) {
                     return createErrorResponse(400, "Already booked for this trip");
                 }
-                
-                int confirmedCount = bookingRepository.countByTripIdAndStatus(tripId, "CONFIRMED");
-                int availableSeats = trip.getCapacity() - trip.getFacultyReserved() - confirmedCount;
+
+                int totalBooked = bookingRepository.countConfirmedAndScannedBookings(tripId);
+                int availableSeats = trip.getCapacity() - trip.getFacultyReserved() - totalBooked;
 
                 String bookingId = "B" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
                 Booking booking = new Booking(bookingId, studentId, tripId, "CONFIRMED");
 
                 if (availableSeats > 0) {
-                    // Confirmed booking - generate QR token
                     String qrToken = QRCodeGenerator.generateQRToken(bookingId, tripId, studentId);
                     booking.setQrToken(qrToken);
                     bookingRepository.save(booking);
                     
+                    if (redisTemplate != null) {
+                        redisTemplate.delete("trip-availability:" + tripId);
+                    }
+
                     Map<String, Object> responseData = Map.of(
-                        "bookingId", bookingId,
-                        "status", "CONFIRMED",
-                        "qrToken", qrToken,
-                        "message", "Seat confirmed"
+                            "bookingId", bookingId,
+                            "status", "CONFIRMED",
+                            "qrToken", qrToken,
+                            "message", "Seat confirmed"
                     );
                     return createSuccessResponse(201, responseData);
                 } else {
-                    // Waitlist booking - use atomic position assignment
                     booking.setStatus("WAITLIST");
-                    bookingRepository.save(booking); // Save first to get DB row
+                    bookingRepository.save(booking);
+                    
+                    if (redisTemplate != null) {
+                        redisTemplate.delete("trip-availability:" + tripId);
+                    }
 
-                    // Atomically assign position using database-level operation
-                    int position = bookingRepository.assignAtomicWaitlistPosition(tripId, bookingId);
+                    int position = bookingRepository.getWaitlistCount(tripId);
+                    bookingRepository.setWaitlistPosition(tripId, bookingId, position);
 
                     Map<String, Object> responseData = Map.of(
                             "bookingId", bookingId,
@@ -148,8 +167,9 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
                 }
 
             } finally {
-                // Always release the Redis lock
-                redisTemplate.delete(lockKey);
+                if (redisTemplate != null && Boolean.TRUE.equals(lockAcquired)) {
+                    redisTemplate.delete(lockKey);
+                }
             }
 
         } catch (Exception e) {
@@ -160,9 +180,9 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
     private Map<String, Object> createSuccessResponse(int statusCode, Map<String, Object> data) {
         try {
             return Map.of(
-                "statusCode", statusCode,
-                "headers", Map.of("Content-Type", "application/json"),
-                "body", objectMapper.writeValueAsString(data)
+                    "statusCode", statusCode,
+                    "headers", Map.of("Content-Type", "application/json"),
+                    "body", objectMapper.writeValueAsString(data)
             );
         } catch (Exception e) {
             return createErrorResponse(500, "Error serializing response");
@@ -171,9 +191,9 @@ public class BookTripHandler implements RequestHandler<Map<String, Object>, Map<
 
     private Map<String, Object> createErrorResponse(int statusCode, String message) {
         return Map.of(
-            "statusCode", statusCode,
-            "headers", Map.of("Content-Type", "application/json"),
-            "body", "{\"message\":\"" + message + "\"}"
+                "statusCode", statusCode,
+                "headers", Map.of("Content-Type", "application/json"),
+                "body", "{\"message\":\"" + message + "\"}"
         );
     }
 }

@@ -11,7 +11,6 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import java.util.Map;
-import java.util.Optional;
 
 import com.campusbus.repository.StudentRepository;
 import com.campusbus.entity.Student;
@@ -52,12 +51,10 @@ public class LoginUserHandler implements RequestHandler<Map<String, Object>, Map
             String cognitoToken = loginUserInCognito(email, password);
             if (cognitoToken != null) {
 
-                Optional<Student> studentOpt = studentRepository.findByEmail(email);
-                if (studentOpt.isEmpty()) {
+                Student student = studentRepository.findByEmail(email);
+                if (student == null) {
                     return createErrorResponse(404, "Student not found in database");
                 }
-
-                Student student = studentOpt.get();
 
                 // Generate our own auth token for API access
                 String authToken = AuthTokenUtil.generateAuthToken(student.getStudentId(), email);

@@ -32,6 +32,18 @@
             <artifactId>aws-java-sdk-cognitoidp</artifactId>
             <version>1.12.585</version>
         </dependency>
+        <!-- AWS S3 SDK for photo uploads in misconduct reports -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-s3</artifactId>
+            <version>1.12.585</version>
+        </dependency>
+        <!-- AWS IoT Data SDK for GPS location broadcasting -->
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-iot</artifactId>
+            <version>1.12.585</version>
+        </dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>

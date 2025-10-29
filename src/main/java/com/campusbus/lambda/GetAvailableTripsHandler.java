@@ -64,23 +64,26 @@ public class GetAvailableTripsHandler implements RequestHandler<Map<String, Obje
 
     private static ConfigurableApplicationContext context;
     private static TripRepository tripRepository;
-
     private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static long lastInitTime = 0;
 
     private void initializeSpringContext() {
-        if (context == null) {
+        if (context == null || System.currentTimeMillis() - lastInitTime > 300000) {
             System.setProperty("spring.main.web-application-type", "none");
+            System.setProperty("spring.main.lazy-initialization", "true");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             tripRepository = context.getBean(TripRepository.class);
+            lastInitTime = System.currentTimeMillis();
         }
     }
 
     @Override
     public Map<String, Object> handleRequest(Map<String, Object> event, Context context) {
+        long startTime = System.currentTimeMillis();
+        
         try {
             initializeSpringContext();
 
-            // Extract query parameters from API Gateway event
             Map<String, String> queryStringParams = (Map<String, String>) event.get("queryStringParameters");
             if (queryStringParams == null) {
                 return createErrorResponse(400, "Missing query parameters");
@@ -94,13 +97,14 @@ public class GetAvailableTripsHandler implements RequestHandler<Map<String, Obje
             }
 
             LocalDate tripDate = LocalDate.parse(dateStr);
+            String dayType = isWeekend(tripDate) ? "WEEKEND" : "WEEKDAY";
+            List<Map<String, Object>> trips = tripRepository.findTripAvailabilityWithCounts(tripDate, route, dayType);
 
-            // Execute complex JOIN query (per Week 1 Checklist)
-            List<Map<String, Object>> trips = tripRepository.findTripAvailabilityWithCounts(tripDate, route);
-
+            System.out.println("Request completed in " + (System.currentTimeMillis() - startTime) + "ms");
             return createSuccessResponse(200, trips);
 
         } catch (Exception e) {
+            e.printStackTrace();
             return createErrorResponse(500, "Error: " + e.getMessage());
         }
     }
@@ -108,22 +112,31 @@ public class GetAvailableTripsHandler implements RequestHandler<Map<String, Obje
     private Map<String, Object> createSuccessResponse(int statusCode, Object body) {
         try {
             return Map.of(
-                    "statusCode", statusCode,
-                    "headers", Map.of("Content-Type", "application/json"),
-                    "body", objectMapper.writeValueAsString(body)
+                "statusCode", statusCode,
+                "headers", Map.of(
+                    "Content-Type", "application/json",
+                    "Access-Control-Allow-Origin", "*"
+                ),
+                "body", objectMapper.writeValueAsString(body)
             );
-        } catch (java.lang.Exception e) {
-            return createErrorResponse(500, "Error serializing response body: " + e.getMessage());
+        } catch (Exception e) {
+            return createErrorResponse(500, "Error serializing response");
         }
     }
 
     private Map<String, Object> createErrorResponse(int statusCode, String message) {
         return Map.of(
-                "statusCode", statusCode,
-                "headers", Map.of("Content-Type", "application/json"),
-                "body", "{\"error\":\"" + message + "\"}"
+            "statusCode", statusCode,
+            "headers", Map.of(
+                "Content-Type", "application/json",
+                "Access-Control-Allow-Origin", "*"
+            ),
+            "body", "{\"error\":\"" + message + "\"}"
         );
     }
 
-
+    private boolean isWeekend(LocalDate date) {
+        int dayOfWeek = date.getDayOfWeek().getValue();
+        return dayOfWeek == 6 || dayOfWeek == 7;
+    }
 }

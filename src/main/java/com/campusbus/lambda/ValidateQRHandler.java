@@ -91,9 +91,14 @@ public class ValidateQRHandler implements RequestHandler<Map<String, Object>, Ma
     private void initializeSpringContext() {
         if (context == null) {
             System.setProperty("spring.main.web-application-type", "none");
+            System.setProperty("spring.main.lazy-initialization", "true");
             context = SpringApplication.run(com.campusbus.booking_system.BookingSystemApplication.class);
             bookingRepository = context.getBean(BookingRepository.class);
-            redisTemplate = context.getBean(RedisTemplate.class);
+            try {
+                redisTemplate = context.getBean(RedisTemplate.class);
+            } catch (Exception e) {
+                redisTemplate = null;
+            }
         }
     }
 

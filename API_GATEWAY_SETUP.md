@@ -86,9 +86,53 @@ https://your-api-id.execute-api.ap-south-1.amazonaws.com/dev
 - **Lambda**: CancelBookingHandler
 - **Path Parameters**: `bookingId`
 
+### 7. Get Student Booking History
+- **Method**: GET
+- **Path**: `/api/bookings/history`
+- **Authorization**: Required (Bearer token)
+- **Lambda**: GetStudentBookingsHandler
+- **Response**:
+```json
+{
+  "bookings": [
+    {
+      "bookingId": "B12AB34CD",
+      "tripId": "T12AB34CD",
+      "status": "SCANNED",
+      "bookedAt": "2024-10-15T08:30:00",
+      "route": "CAMPUS_TO_CITY",
+      "tripDate": "2024-10-15",
+      "departureTime": "08:30"
+    }
+  ]
+}
+```
+
+## Profile Endpoints
+
+### 8. Get User Profile
+- **Method**: GET
+- **Path**: `/api/profile`
+- **Authorization**: Required (Bearer token)
+- **Lambda**: GetUserProfileHandler
+- **Response**:
+```json
+{
+  "studentId": "S12AB34CD",
+  "email": "student@college.edu",
+  "name": "John Doe",
+  "room": "A-101",
+  "phone": "+91-9876543210",
+  "penaltyCount": 0,
+  "isBlocked": false,
+  "profileComplete": true,
+  "activeBookings": []
+}
+```
+
 ## QR Code Endpoints
 
-### 7. Validate QR Code
+### 9. Validate QR Code
 - **Method**: POST
 - **Path**: `/api/qr/validate`
 - **Authorization**: Required (Operator token)

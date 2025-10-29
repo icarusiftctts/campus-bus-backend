@@ -32,10 +32,13 @@ import java.util.UUID;
  *    }
  * 3. Body: {
  *      "route": "CAMPUS_TO_CITY",
+ *      "destination": "Raja Park",
+ *      "busNumber": "1",
  *      "tripDate": "2024-10-15",
  *      "departureTime": "08:30",
  *      "capacity": 35,
- *      "facultyReserved": 5
+ *      "facultyReserved": 5,
+ *      "dayType": "WEEKDAY"
  *    }
  * 4. Success Response (201): {
  *      "message": "Trip created: T12AB34CD"
@@ -124,10 +127,13 @@ public class CreateTripHandler implements RequestHandler<Map<String, Object>, Ma
             Map<String, Object> body = objectMapper.readValue(requestBody, Map.class);
 
             String route = (String) body.get("route");
+            String destination = (String) body.get("destination");
+            String busNumber = (String) body.get("busNumber");
             String tripDateStr = (String) body.get("tripDate");
             String departureTimeStr = (String) body.get("departureTime");
             Integer capacity = (Integer) body.getOrDefault("capacity", 35);
             Integer facultyReserved = (Integer) body.getOrDefault("facultyReserved", 5);
+            String dayType = (String) body.getOrDefault("dayType", "WEEKDAY");
 
             // Validate input
             if (!route.equals("CAMPUS_TO_CITY") && !route.equals("CITY_TO_CAMPUS")) {
@@ -155,10 +161,13 @@ public class CreateTripHandler implements RequestHandler<Map<String, Object>, Ma
             Trip trip = new Trip();
             trip.setTripId(tripId);
             trip.setRoute(route);
+            trip.setDestination(destination);
+            trip.setBusNumber(busNumber);
             trip.setTripDate(tripDate);
             trip.setDepartureTime(departureTime);
             trip.setCapacity(capacity);
             trip.setFacultyReserved(facultyReserved);
+            trip.setDayType(dayType);
 
             tripRepository.save(trip);
 
